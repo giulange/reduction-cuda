@@ -1,2 +1,2 @@
 # reduction-cuda
-Create the fastest reduction kernel possible, for different purposes.
+Create the fastest reduction cuda-kernel possible, for different purposes.
