@@ -7,16 +7,18 @@ FIL_ROI                 = 'ROI.tif';
 
 % parameters:
 threshold               = 0.5;
-newsize                 = [256,256];
+newsize                 = [512,256];
 
 % create:
-ROI                     = ones( newsize );
+ROI                     = true( newsize );
 BIN1                    = rand( newsize );
 BIN2                    = rand( newsize );
 BIN1(BIN1>=threshold)   = 1;
 BIN1(BIN1< threshold)   = 0;
 BIN2(BIN2>=threshold)   = 1;
 BIN2(BIN2< threshold)   = 0;
+BIN1                    = logical(BIN1);
+BIN2                    = logical(BIN2);
 
 % Build the new georeferenced GRID:
 info                    = geotiffinfo( fullfile('/home/giuliano/git/cuda/fragmentation/data','BIN.tif') );
@@ -40,18 +42,101 @@ BIN1                    = geotiffread( fullfile(BASE_DIR,'data',FIL_BIN1) );
 BIN2                    = geotiffread( fullfile(BASE_DIR,'data',FIL_BIN2) );
 ROI                     = geotiffread( fullfile(BASE_DIR,'data',FIL_ROI) );
 %% compute
+LTAKE_ml= (BIN2-BIN1).*ROI;
+%% print bins & counts [matlab vs cuda]
+% -----------------------------
+% (N) (BIN2,BIN1)	--> (LTAKE)
+% -----------------------------
+% (1) (0,0) 		--> +0			---> nothing changed in rural pixels
+% (2) (0,1) 		--> -1			---> increase of rural pixels
+% (3) (1,0) 		--> +1			---> increase of urban pixels
+% (4) (1,1) 		--> -0			---> nothing changed in urban pixels
+% -----------------------------
+% where values can be { 0:rural; 1:urban }.
 
-DIFF    = (BIN2-BIN1).*ROI;
-SUM     = (BIN2+BIN1).*ROI;
-bins    = [-1,0,+1];
-count   = histc(DIFF(:),bins);
+%--OLD--
+% bins    = [-1,0,+1];
+% count   = histc(LTAKE_ml(:),bins);
+%--OLD--
 
+bins = {'+0','-1','+1','-0'};
+
+% MATLAB
+count(1) = sum(BIN2(:)==0 & BIN1(:)==0);
+count(2) = sum(BIN2(:)==0 & BIN1(:)==1);
+count(3) = sum(BIN2(:)==1 & BIN1(:)==0);
+count(4) = sum(BIN2(:)==1 & BIN1(:)==1);
 fprintf('\n')
+fprintf('%s\n','MatLab')
 fprintf('%s\n',repmat('-',1,16))
 fprintf(' %s\t%s\n','bins','hist')
 fprintf('%s\n',repmat('-',1,16))
-for ii = 1:length(bins)
-    fprintf(' %+2d\t%d\n',bins(ii),count(ii))
+for ii = 1:size(bins,2)
+    fprintf(' %s\t%d\n',bins{ii},count(ii))
 end
 fprintf('%s\n',repmat('-',1,16))
+fprintf(' %s\t%d\n','tot',sum(count))
+% CUDA
+count_cu = load('data/LTAKE_count.txt');
 fprintf('\n')
+fprintf('%s\n','CUDA')
+fprintf('%s\n',repmat('-',1,16))
+fprintf(' %s\t%s\n','bins','hist')
+fprintf('%s\n',repmat('-',1,16))
+for ii = 1:size(bins,2)
+    fprintf(' %s\t%d\n',bins{ii},count_cu(ii))
+end
+fprintf('%s\n',repmat('-',1,16))
+fprintf(' %s\t%d\n','tot',sum(count_cu))
+fprintf('\n')
+%% DIFF MatLab vs CUDA
+
+LTAKE_cu = double(geotiffread( fullfile(BASE_DIR,'data','LTAKE_map.tif') ));
+
+DIFF = LTAKE_ml-LTAKE_cu;
+
+fprintf('No. of pixels with errors (MatLab-CUDA):\t%d\n',sum(DIFF(:)))
+
+
+%% understand grid/block size for imperviousness_change_sh4
+
+% set current GPU:
+cGPU                    = gpuDevice(2);
+% number of Streaming Multiprocessors:
+N_sm                    = cGPU.MultiprocessorCount;
+
+% fetch metadata:
+info                    = geotiffinfo( fullfile('/home/giuliano/git/cuda/reduction/data','BIN1.tif') );
+% fetch image size from file:
+map_len                 = info.Height*info.Width;
+
+% number of threads per block (on X dim, since Y=1):
+max_threads_per_SM      = 1536; % maxThreadsPerMultiProcessor ==> deviceQuery.cpp
+bdx                     = 16*16;
+bdy                     = 1;
+
+% number of map elements in charge of each thread:
+% I assume that:
+%   > one map element per thread is time consuming;
+%   > the number of active blocks equals the number of streaming
+%     multiprocessors (instead I should consider the maximum number of
+%     blocks per SM and the maximum number of threads per SM in order to
+%     correctly calculate the number of map elements per thread). I raise
+%     the number of map elements per thread and reduce the overall number
+%     of atomic operations (atomicAdd) performed (expecting to be faster);
+%   > I can decide to assign 16 map elements to each thread and calculate
+%     the CUDA grid dimension in X accordingly. This way I raise the number
+%     of total blocks per GPU (assuming I can allocate more blocks per SM)
+%     but I raise the number of atomic operations (atomicAdd) performed
+%     (hence I expect to be slower). But how can I know the number of
+%     blocks per SM I have on board??
+% 
+% number of blocks per SM to reach full occupancy
+num_blocks_per_SM       = max_threads_per_SM / bdx;
+mapel_per_thread        = ceil( map_len / ((bdx*bdy)*N_sm*num_blocks_per_SM) );
+gdx                     = ceil( map_len / ( mapel_per_thread*(bdx*bdy) ) );
+gdy                     = 1;
+
+x                       = bdx; % any thread value in range [1,bdx]
+bix                     = gdx; % or another value in range [1,gdx]
+tix                     = (bix*bdx+x)*mapel_per_thread
