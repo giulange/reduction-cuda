@@ -42,7 +42,7 @@ BIN1                    = geotiffread( fullfile(BASE_DIR,'data',FIL_BIN1) );
 BIN2                    = geotiffread( fullfile(BASE_DIR,'data',FIL_BIN2) );
 ROI                     = geotiffread( fullfile(BASE_DIR,'data',FIL_ROI) );
 %% compute
-LTAKE_ml= (BIN2-BIN1).*ROI;
+LTAKE_ml                = (BIN2-BIN1).*ROI;
 %% print bins & counts [matlab vs cuda]
 % -----------------------------
 % (N) (BIN2,BIN1)	--> (LTAKE)
@@ -90,14 +90,9 @@ fprintf('%s\n',repmat('-',1,16))
 fprintf(' %s\t%d\n','tot',sum(count_cu))
 fprintf('\n')
 %% DIFF MatLab vs CUDA
-
-LTAKE_cu = double(geotiffread( fullfile(BASE_DIR,'data','LTAKE_map.tif') ));
-
-DIFF = LTAKE_ml-LTAKE_cu;
-
-fprintf('No. of pixels with errors (MatLab-CUDA):\t%d\n',sum(DIFF(:)))
-
-
+LTAKE_cu        = double(geotiffread( fullfile(BASE_DIR,'data','LTAKE_map.tif') ));
+DIFF            = LTAKE_ml-LTAKE_cu;
+fprintf( 'No. of pixels with errors (MatLab-CUDA):\t%d\n', sum(abs(LTAKE_ml(:)-LTAKE_cu(:))) )
 %% understand grid/block size for imperviousness_change_sh4
 
 % set current GPU:
@@ -137,6 +132,6 @@ mapel_per_thread        = ceil( map_len / ((bdx*bdy)*N_sm*num_blocks_per_SM) );
 gdx                     = ceil( map_len / ( mapel_per_thread*(bdx*bdy) ) );
 gdy                     = 1;
 
-x                       = bdx; % any thread value in range [1,bdx]
+x                       = 1:bdx; % any thread value in range [1,bdx]
 bix                     = gdx; % or another value in range [1,gdx]
 tix                     = (bix*bdx+x)*mapel_per_thread

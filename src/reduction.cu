@@ -142,17 +142,18 @@ __global__ void imperviousness_change_histc_sh_4(
 	unsigned int tid		= (bdx*bix + x);		// global thread index
 	unsigned int tix		= tid*mapel_per_thread;	// offset, considering mapel_per_thread pixels per thread
 
-	extern __shared__ int sh_sum[];
 	const int num_bins 		= 4;
-	int nclasses			= num_bins/2;
+	const int nclasses		= num_bins/2;
+
+	extern __shared__ int sh_sum[];
 	int loc_sum[num_bins];
 	unsigned int ii, o;
 
-	if( tix < (WIDTH*HEIGHT - WIDTH*HEIGHT%mapel_per_thread+1) ){
+//	if( tix < (WIDTH*HEIGHT) ){ // - WIDTH*HEIGHT%mapel_per_thread+1
 		// initialise at zero (IMPORTANT!!!):
 		for(ii=0;ii<num_bins;ii++){
-			loc_sum[ii] = 0;
-			sh_sum[x*num_bins+ii] = 0;
+			loc_sum[ii]				= 0;
+			sh_sum[x*num_bins+ii]	= 0;
 		}
 		syncthreads();
 
@@ -193,7 +194,7 @@ __global__ void imperviousness_change_histc_sh_4(
 				if(x<bdx/2+1)	atomicAdd( &dev_LTAKE_count[1+ii*2], sh_sum[x+o] );
 			}
 */		}
-	}
+	//}
 }
 
 int main( int argc, char **argv ){
@@ -309,7 +310,7 @@ int main( int argc, char **argv ){
 														dev_LTAKE_count, mapel_per_thread );
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
-	printf("  -%d- %12s\t%6d [msec]\n",++count_print,kern_1,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	printf("  -%d- %34s\t%6d [msec]\n",++count_print,kern_1,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	if (print_intermediate_arrays){
 		CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(int),cudaMemcpyDeviceToHost) );
 		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_1);
@@ -321,7 +322,7 @@ int main( int argc, char **argv ){
 	imperviousness_change<<<grid_2,block_2>>>( 	dev_BIN1, dev_BIN2, MDbin.width, MDbin.heigth, dev_LTAKE_map );
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
-	printf("  -%d- %12s\t%6d [msec]\n",++count_print,kern_2,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	printf("  -%d- %34s\t%6d [msec]\n",++count_print,kern_2,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	if (print_intermediate_arrays){
 		CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeInt,cudaMemcpyDeviceToHost) );
 		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_2);
@@ -329,8 +330,8 @@ int main( int argc, char **argv ){
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 
-	printf("______________________________________\n");
-	printf("  %16s\t%6d [msec]\n", "Total time:",elapsed_time );
+	printf("________________________________________________________________\n");
+	printf("%40s\t%6d [msec]\n", "Total time:",elapsed_time );
 
 	CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeInt,cudaMemcpyDeviceToHost) );
 	CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(int),cudaMemcpyDeviceToHost) );
