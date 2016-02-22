@@ -89,13 +89,69 @@ __global__ void imperviousness_change(
 							unsigned int WIDTH, unsigned int HEIGHT, int *dev_LTAKE_map
 							)
 {
-	unsigned int x 			= threadIdx.x;
-	unsigned int bdx		= blockDim.x;
-	unsigned int bix		= blockIdx.x;
-	unsigned int tix		= bdx*bix + x;	// offset
+	unsigned long int x 	= threadIdx.x;
+	unsigned long int bdx	= blockDim.x;
+	unsigned long int bix	= blockIdx.x;
+	unsigned long int tix	= bdx*bix + x;	// offset
 
 	if( tix < WIDTH*HEIGHT ){
 		dev_LTAKE_map[tix]	= (int)((int)dev_BIN2[tix] - (int)dev_BIN1[tix]);
+	}
+}
+
+__global__ void imperviousness_change_double(
+							const unsigned char *dev_BIN1, const unsigned char *dev_BIN2,
+							unsigned int WIDTH, unsigned int HEIGHT, double *dev_LTAKE_map
+							)
+{
+	unsigned long int x 	= threadIdx.x;
+	unsigned long int bdx	= blockDim.x;
+	unsigned long int bix	= blockIdx.x;
+	unsigned long int tix	= bdx*bix + x;	// offset
+
+	if( tix < WIDTH*HEIGHT ){
+		dev_LTAKE_map[tix]	= (double)((double)dev_BIN2[tix] - (double)dev_BIN1[tix]);
+	}
+}
+__global__ void imperviousness_change_char(
+							const unsigned char *dev_BIN1, const unsigned char *dev_BIN2,
+							unsigned int WIDTH, unsigned int HEIGHT, char *dev_LTAKE_map
+							)
+{
+	unsigned long int x 	= threadIdx.x;
+	unsigned long int bdx	= blockDim.x;
+	unsigned long int bix	= blockIdx.x;
+	unsigned long int tix	= bdx*bix + x;	// offset
+
+	if( tix < WIDTH*HEIGHT ){
+		dev_LTAKE_map[tix]	= dev_BIN2[tix] - dev_BIN1[tix];
+	}
+}
+
+__global__ void imperviousness_change_large(
+							const unsigned char *dev_BIN1, const unsigned char *dev_BIN2,
+							unsigned int WIDTH, unsigned int HEIGHT, int *dev_LTAKE_map,
+							int mapel_per_thread
+							)
+{
+	unsigned long int x 	= threadIdx.x;
+	unsigned long int bdx	= blockDim.x;
+	unsigned long int bix	= blockIdx.x;
+	//unsigned long int gdx	= gridDim.x;
+	unsigned long int tid	= bdx*bix + x;	// offset
+	unsigned long int tix	= tid * mapel_per_thread;	// offset
+
+	//extern __shared__ int sh_diff[];
+
+	if( bdx*bix*mapel_per_thread < WIDTH*HEIGHT ){
+		//sh_diff[tid] = 0; syncthreads();
+		for(long int ii=0;ii<mapel_per_thread;ii++){
+			if( tix+ii < WIDTH*HEIGHT ){
+				//sh_diff[tid]		= (int)((int)dev_BIN2[tix+ii] - (int)dev_BIN1[tix+ii]);
+				dev_LTAKE_map[tix+ii] = (int)((int)dev_BIN2[tix+ii] - (int)dev_BIN1[tix+ii]);
+			} //__syncthreads();
+			//dev_LTAKE_map[tix+ii]	= sh_diff[tid];
+		}
 	}
 }
 
@@ -210,37 +266,45 @@ int main( int argc, char **argv ){
 	GDALAllRegister();	// Establish GDAL context.
 	cudaFree(0); 		// Establish CUDA context.
 
-	metadata 			MDbin,MDroi,MDint; // ,MDtranspose
+	metadata 			MDbin,MDroi,MDint,MDdouble;
 	unsigned int		map_len;
-	int 				*dev_LTAKE_map,*host_LTAKE_map;
+	double 				*dev_LTAKE_map,*host_LTAKE_map;
+	//int 				*dev_LTAKE_map,*host_LTAKE_map;
+	//char 				*dev_LTAKE_map,*host_LTAKE_map;
 	int 				*dev_LTAKE_count,*host_LTAKE_count;
+	//double 				*dev_LTAKE_count,*host_LTAKE_count;
 	unsigned char		*dev_BIN1, *dev_BIN2, *dev_ROI;
 	clock_t				start_t,end_t;
-	unsigned int 		elapsed_time	= 0;
+	unsigned int 		elapsed_time		= 0;
 	cudaDeviceProp		devProp;
 	unsigned int		gpuDev=0;
 	// count the number of kernels that must print their output:
-	unsigned int 		count_print = 0;
+	unsigned int 		count_print 		= 0;
+	bool 				use_large			= false;
+	int 				mapel_per_thread_2 	= 0;
 
 	/*
 	 * 		LOAD METADATA & DATA
 	 */
 	MDbin					= geotiffinfo( FIL_BIN1, 1 );
-	MDroi 					= geotiffinfo( FIL_ROI, 1 );
+	MDroi 					= geotiffinfo( FIL_ROI,  1 );
 	// set metadata to eventually print arrays after any CUDA kernel:
-	MDint 					= MDbin;
+/*	MDint 					= MDbin;
 	MDint.pixel_type		= GDT_Int32;
+*/	MDdouble 				= MDbin;
+	MDdouble.pixel_type		= GDT_Float64;
 	// Set size of all arrays which come into play:
 	map_len 				= MDbin.width*MDbin.heigth;
 	size_t	sizeChar		= map_len*sizeof( unsigned char );
-	size_t	sizeInt			= map_len*sizeof( int );
+	size_t	sizeInt			= map_len*sizeof( int 			);
+	size_t	sizeDouble		= map_len*sizeof( double 		);
 	// initialize arrays:
 	unsigned char *BIN1		= (unsigned char *) CPLMalloc( sizeChar );
 	unsigned char *BIN2		= (unsigned char *) CPLMalloc( sizeChar );
 	unsigned char *ROI 		= (unsigned char *) CPLMalloc( sizeChar );
 	// load ROI:
 	printf("Importing...\t%s\n",FIL_ROI);
-	geotiffread( FIL_ROI, MDroi, &ROI[0] );
+	geotiffread( FIL_ROI, MDroi, &ROI[0]   );
 	// load BIN:
 	printf("Importing...\t%s\n",FIL_BIN1);
 	geotiffread( FIL_BIN1, MDbin, &BIN1[0] );
@@ -251,16 +315,23 @@ int main( int argc, char **argv ){
 	 * 	INITIALIZE CPU & GPU ARRAYS
 	 */
 	// initialize grids on CPU MEM:
-	CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_LTAKE_map, 	sizeInt)  );
+	CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_LTAKE_map, 	sizeDouble)  );
+	//CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_LTAKE_map, 	sizeInt)  );
+	//CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_LTAKE_map, 	sizeChar)  );
+	//CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_LTAKE_count, 	4*sizeof(double))  );
 	CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_LTAKE_count, 	4*sizeof(int))  );
 	// initialize grids on GPU MEM:
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_BIN1, 		sizeChar) );
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_BIN2, 		sizeChar) );
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_ROI,  		sizeChar) );
-	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_LTAKE_map, 	sizeInt)  );
+	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_LTAKE_map, 	sizeDouble)  );
+	//CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_LTAKE_map, 	sizeInt)  );
+	//CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_LTAKE_map, 	sizeChar)  );
+	//CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_LTAKE_count, 	4*sizeof(double))  );
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_LTAKE_count, 	4*sizeof(int))  );
 	// memset:
 	CUDA_CHECK_RETURN( cudaMemset(dev_LTAKE_count, 0, 4*sizeof(int)) );
+	//CUDA_CHECK_RETURN( cudaMemset(dev_LTAKE_count, 0, 4*sizeof(double)) );
 	// H2D:
 	CUDA_CHECK_RETURN( cudaMemcpy(dev_BIN1, BIN1, 	sizeChar, cudaMemcpyHostToDevice) );
 	CUDA_CHECK_RETURN( cudaMemcpy(dev_BIN2, BIN2, 	sizeChar, cudaMemcpyHostToDevice) );
@@ -293,50 +364,87 @@ int main( int argc, char **argv ){
 	dim3 block( bdx,1,1 );
 	dim3 grid ( gdx,1,1 );
 	int sh_mem				= (BLOCK_DIM*4)*(sizeof(int));
-	unsigned int gdx_2		= (unsigned int)ceil( (double)map_len / (double)( (bdx*2) ) );
-	dim3 block_2( bdx*2,1,1 );
+	//double sh_mem_double	= (BLOCK_DIM*4)*(sizeof(double));
+	unsigned int gdx_2		= (unsigned int)ceil( (double)map_len / (double)( (bdx*4) ) );
+	dim3 block_2( bdx*4,1,1 );
 	dim3 grid_2 ( gdx_2,1,1 );
+	if (gdx_2>devProp.maxGridSize[0]) {
+/*		printf( "Error: cannot allocate gridsize=%d (limit is %d)!\n",gdx_2,devProp.maxGridSize[0] );
+		exit(EXIT_FAILURE);
+*/		use_large 			= true;
+		mapel_per_thread_2 	= 32*4; // warp size times 4
+		gdx_2				= (unsigned int)ceil( (double)map_len / (double)( (bdx*2*mapel_per_thread_2) ) );
+		dim3 block_2( bdx*2,1,1 );
+		dim3 grid_2 ( gdx_2,1,1 );
+	}
 
 	/*		KERNELS INVOCATION
 	 *
 	 *			******************************
 	 *			-1- imperviousness_change_sh_4
+	 *			-2- imperviousness_change
 	 *			******************************
+	 *
+	 *		Note that imperviousness_change_large does not work!!
 	 */
 	printf("\n\n");
 	// ***-1-***
 	start_t = clock();
 	imperviousness_change_histc_sh_4<<<grid,block,sh_mem>>>( 	dev_BIN1, dev_BIN2, MDbin.width, MDbin.heigth,
+																dev_LTAKE_count, mapel_per_thread );
+
+/*	imperviousness_change_histc_sh_4_double<<<grid,block,sh_mem_double>>>(
+														dev_BIN1, dev_BIN2, MDbin.width, MDbin.heigth,
 														dev_LTAKE_count, mapel_per_thread );
-	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+*/	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %34s\t%6d [msec]\n",++count_print,kern_1,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	if (print_intermediate_arrays){
 		CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(int),cudaMemcpyDeviceToHost) );
+		//CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(double),cudaMemcpyDeviceToHost) );
 		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_1);
 		write_mat_int( host_LTAKE_count, 4, 1, buffer );
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	// ***-2-***
 	start_t = clock();
-	imperviousness_change<<<grid_2,block_2>>>( 	dev_BIN1, dev_BIN2, MDbin.width, MDbin.heigth, dev_LTAKE_map );
+	if(use_large!=true){
+		imperviousness_change_double<<<grid_2,block_2>>>( 		dev_BIN1, dev_BIN2, MDbin.width, MDbin.heigth, dev_LTAKE_map );
+		//imperviousness_change<<<grid_2,block_2>>>( 		dev_BIN1, dev_BIN2, MDbin.width, MDbin.heigth, dev_LTAKE_map );
+		//imperviousness_change_char<<<grid_2,block_2>>>( dev_BIN1, dev_BIN2, MDbin.width, MDbin.heigth, dev_LTAKE_map );
+	}else{
+		printf("Error: imperviousness_change_large does not work yet!");
+		exit(EXIT_FAILURE);
+/*		imperviousness_change_large<<<grid_2,block_2>>>(dev_BIN1, dev_BIN2, MDbin.width, MDbin.heigth, dev_LTAKE_map, mapel_per_thread_2 );
+		kern_2 		= "imperviousness_change_large"	;
+*/	}
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %34s\t%6d [msec]\n",++count_print,kern_2,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	if (print_intermediate_arrays){
-		CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeInt,cudaMemcpyDeviceToHost) );
+		CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
+		//CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeInt,cudaMemcpyDeviceToHost) );
+		//CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeChar,cudaMemcpyDeviceToHost) );
 		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_2);
-		geotiffwrite( FIL_BIN1, buffer, MDint, host_LTAKE_map );
+		geotiffwrite( FIL_BIN1, buffer, MDdouble, host_LTAKE_map );
+		//geotiffwrite( FIL_BIN1, buffer, MDint, host_LTAKE_map );
+		//geotiffwrite( FIL_BIN1, buffer, MDbin, host_LTAKE_map );
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 
 	printf("________________________________________________________________\n");
 	printf("%40s\t%6d [msec]\n", "Total time:",elapsed_time );
 
-	CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeInt,cudaMemcpyDeviceToHost) );
+	CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
+	//CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeInt,cudaMemcpyDeviceToHost) );
+	//CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeChar,cudaMemcpyDeviceToHost) );
 	CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(int),cudaMemcpyDeviceToHost) );
+	//CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(double),cudaMemcpyDeviceToHost) );
 	// save on HDD
-	geotiffwrite( FIL_BIN1, FIL_LTAKE_grid, MDint, host_LTAKE_map );
+	geotiffwrite( FIL_BIN1, FIL_LTAKE_grid, MDdouble, host_LTAKE_map );
+	//geotiffwrite( FIL_BIN1, FIL_LTAKE_grid, MDint, host_LTAKE_map );
+	//geotiffwrite( FIL_BIN1, FIL_LTAKE_grid, MDbin, host_LTAKE_map );
+
 	write_mat_T( host_LTAKE_count, 4, 1, FIL_LTAKE_count );
 
 	// CUDA free:
@@ -345,6 +453,12 @@ int main( int argc, char **argv ){
 	cudaFree( dev_LTAKE_map		);
 	cudaFree( dev_LTAKE_count	);
 	cudaFree( dev_ROI			);
+
+	cudaFree( BIN1				);
+	cudaFree( BIN2				);
+	cudaFree( host_LTAKE_map	);
+	cudaFree( host_LTAKE_count	);
+	cudaFree( ROI				);
 
 	// Destroy context
 	CUDA_CHECK_RETURN( cudaDeviceReset() );
