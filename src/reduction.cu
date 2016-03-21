@@ -292,7 +292,7 @@ int main( int argc, char **argv ){
 	GDALAllRegister();	// Establish GDAL context.
 	cudaFree(0); 		// Establish CUDA context.
 
-	metadata 			MDbin,MDroi,MDint,MDdouble;
+	metadata 			MDbin,MDroi,MDdouble;
 	unsigned int		map_len;
 	double 				*dev_LTAKE_map,*host_LTAKE_map;
 	//int 				*dev_LTAKE_map,*host_LTAKE_map;
@@ -322,7 +322,7 @@ int main( int argc, char **argv ){
 	// Set size of all arrays which come into play:
 	map_len 				= MDbin.width*MDbin.heigth;
 	size_t	sizeChar		= map_len*sizeof( unsigned char );
-	size_t	sizeInt			= map_len*sizeof( int 			);
+	size_t	sizeInt			= 4*sizeof( int 			);
 	size_t	sizeDouble		= map_len*sizeof( double 		);
 	// initialize arrays:
 	unsigned char *BIN1		= (unsigned char *) CPLMalloc( sizeChar );
@@ -345,7 +345,7 @@ int main( int argc, char **argv ){
 	//CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_LTAKE_map, 	sizeInt)  );
 	//CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_LTAKE_map, 	sizeChar)  );
 	//CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_LTAKE_count, 	4*sizeof(double))  );
-	CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_LTAKE_count, 	4*sizeof(int))  );
+	CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_LTAKE_count, 	sizeInt)  );
 	// initialize grids on GPU MEM:
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_BIN1, 		sizeChar) );
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_BIN2, 		sizeChar) );
@@ -354,9 +354,9 @@ int main( int argc, char **argv ){
 	//CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_LTAKE_map, 	sizeInt)  );
 	//CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_LTAKE_map, 	sizeChar)  );
 	//CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_LTAKE_count, 	4*sizeof(double))  );
-	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_LTAKE_count, 	4*sizeof(int))  );
+	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_LTAKE_count, 	sizeInt)  );
 	// memset:
-	CUDA_CHECK_RETURN( cudaMemset(dev_LTAKE_count, 0, 4*sizeof(int)) );
+	CUDA_CHECK_RETURN( cudaMemset(dev_LTAKE_count, 0, sizeInt) );
 	//CUDA_CHECK_RETURN( cudaMemset(dev_LTAKE_count, 0, 4*sizeof(double)) );
 	// H2D:
 	CUDA_CHECK_RETURN( cudaMemcpy(dev_BIN1, BIN1, 	sizeChar, cudaMemcpyHostToDevice) );
@@ -446,7 +446,7 @@ int main( int argc, char **argv ){
 	end_t = clock();
 	printf("  -%d- %34s\t%6d [msec]\n",++count_print,kern_1,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	if (print_intermediate_arrays){
-		CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(int),cudaMemcpyDeviceToHost) );
+		CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)sizeInt,cudaMemcpyDeviceToHost) );
 		//CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(double),cudaMemcpyDeviceToHost) );
 		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_1);
 		write_mat_int( host_LTAKE_count, 4, 1, buffer );
@@ -484,7 +484,7 @@ int main( int argc, char **argv ){
 	CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
 	//CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeInt,cudaMemcpyDeviceToHost) );
 	//CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_map,dev_LTAKE_map,	(size_t)sizeChar,cudaMemcpyDeviceToHost) );
-	CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(int),cudaMemcpyDeviceToHost) );
+	CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)sizeInt,cudaMemcpyDeviceToHost) );
 	//CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(double),cudaMemcpyDeviceToHost) );
 	// save on HDD
 	geotiffwrite( FIL_BIN1, FIL_LTAKE_grid, MDdouble, host_LTAKE_map );
