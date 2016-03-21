@@ -1,66 +1,109 @@
 %% PARS
 BASE_DIR                = '/home/giuliano/git/cuda/reduction';
-FIL_BIN1                = 'BIN1.tif';
-FIL_BIN2                = 'BIN2.tif';
-FIL_ROI                 = 'ROI.tif';
+% I/–
+% FIL_BIN1                = fullfile( BASE_DIR, 'data', 'BIN1.tif');
+% FIL_BIN2                = fullfile( BASE_DIR, 'data', 'BIN2.tif');
+% FIL_ROI                 = fullfile( BASE_DIR, 'data', 'ROI.tif');
+FIL_ROI                 = '/media/DATI/db-backup/ssgci-data/testing/ssgci_roi.tif';
+FIL_BIN1                = '/media/DATI/db-backup/ssgci-data/testing/ssgci_bin.tif';
+FIL_BIN2                = '/media/DATI/db-backup/ssgci-data/testing/ssgci_bin2.tif';
+% –/O
+FIL_LTAKE_grid          = fullfile(BASE_DIR,'data','LTAKE_map.tif');
+FIL_LTAKE_count         = fullfile(BASE_DIR,'data','LTAKE_count.txt');
+
+% cuda exe:
+exefil                  = fullfile( BASE_DIR, 'Debug', 'reduction-gci' );
+
+% pars:
+create_bins             = 0;
+cu_run                  = 1;
+plot_me                 = 0;
 %% create two BINs and save (once)
+if create_bins
+    % parameters:
+    threshold               = 0.6;
+    newsize                 = [8000,8000];% 
+    % NOTE: if I use [9000,9000] the imperviousness_change_large kernel should
+    % be called, but this kernel does not work fine yet!!
+    % The limit is given by:
+    cGPU = gpuDevice(1);
+    Threshold = cGPU.MaxThreadsPerBlock * cGPU.MaxGridSize(1);
 
-% parameters:
-threshold               = 0.6;
-newsize                 = [8000,8000];% 
-% NOTE: if I use [9000,9000] the imperviousness_change_large kernel should
-% be called, but this kernel does not work fine yet!!
-% The limit is given by:
-cGPU = gpuDevice(1);
-Threshold = cGPU.MaxThreadsPerBlock * cGPU.MaxGridSize(1);
+    if prod(newsize)>Threshold
+        error(  'Exceded the maximum number of pixels (%d) that the basic %s kernel can handle!',...
+                Threshold,'"imperviousness_change"')
+    end
 
-if prod(newsize)>Threshold
-    error(  'Exceded the maximum number of pixels (%d) that the basic %s kernel can handle!',...
-            Threshold,'"imperviousness_change"')
+    % create:
+    ROI                     = true( newsize );
+    BIN1                    = rand( newsize );
+    BIN2                    = rand( newsize );
+    BIN1(BIN1>=threshold)   = 1;
+    BIN1(BIN1< threshold)   = 0;
+    BIN2(BIN2>=threshold)   = 1;
+    BIN2(BIN2< threshold)   = 0;
+    BIN1                    = logical(BIN1);
+    BIN2                    = logical(BIN2);
+
+    % Build the new georeferenced GRID:
+    info                    = geotiffinfo( fullfile('/home/giuliano/git/cuda/fragmentation/data','BIN.tif') );
+    R                       = info.SpatialRef;
+    newXlim                 = [ R.XLimWorld(1), R.XLimWorld(1) + newsize(2)*R.DeltaX ];
+    newYlim                 = [ R.YLimWorld(1), R.YLimWorld(1) + newsize(1)*(-R.DeltaY) ];
+    Rnew                    = maprasterref( ...
+                'XLimWorld',              newXlim, ...
+                'YLimWorld',              newYlim, ...
+                'RasterSize',             newsize, ...
+                'RasterInterpretation',   R.RasterInterpretation, ...
+                'ColumnsStartFrom',       R.ColumnsStartFrom, ...
+                'RowsStartFrom',          R.RowsStartFrom ...
+                                      );
+
+    geotiffwrite( fullfile(BASE_DIR,'data',FIL_ROI),   ROI, Rnew, 'GeoKeyDirectoryTag', info.GeoTIFFTags.GeoKeyDirectoryTag );
+    geotiffwrite( fullfile(BASE_DIR,'data',FIL_BIN1), BIN1, Rnew, 'GeoKeyDirectoryTag', info.GeoTIFFTags.GeoKeyDirectoryTag );
+    geotiffwrite( fullfile(BASE_DIR,'data',FIL_BIN2), BIN2, Rnew, 'GeoKeyDirectoryTag', info.GeoTIFFTags.GeoKeyDirectoryTag );
 end
-
-% create:
-ROI                     = true( newsize );
-BIN1                    = rand( newsize );
-BIN2                    = rand( newsize );
-BIN1(BIN1>=threshold)   = 1;
-BIN1(BIN1< threshold)   = 0;
-BIN2(BIN2>=threshold)   = 1;
-BIN2(BIN2< threshold)   = 0;
-BIN1                    = logical(BIN1);
-BIN2                    = logical(BIN2);
-
-% Build the new georeferenced GRID:
-info                    = geotiffinfo( fullfile('/home/giuliano/git/cuda/fragmentation/data','BIN.tif') );
-R                       = info.SpatialRef;
-newXlim                 = [ R.XLimWorld(1), R.XLimWorld(1) + newsize(2)*R.DeltaX ];
-newYlim                 = [ R.YLimWorld(1), R.YLimWorld(1) + newsize(1)*(-R.DeltaY) ];
-Rnew                    = maprasterref( ...
-            'XLimWorld',              newXlim, ...
-            'YLimWorld',              newYlim, ...
-            'RasterSize',             newsize, ...
-            'RasterInterpretation',   R.RasterInterpretation, ...
-            'ColumnsStartFrom',       R.ColumnsStartFrom, ...
-            'RowsStartFrom',          R.RowsStartFrom ...
-                                  );
-
-geotiffwrite( fullfile(BASE_DIR,'data',FIL_ROI),   ROI, Rnew, 'GeoKeyDirectoryTag', info.GeoTIFFTags.GeoKeyDirectoryTag );
-geotiffwrite( fullfile(BASE_DIR,'data',FIL_BIN1), BIN1, Rnew, 'GeoKeyDirectoryTag', info.GeoTIFFTags.GeoKeyDirectoryTag );
-geotiffwrite( fullfile(BASE_DIR,'data',FIL_BIN2), BIN2, Rnew, 'GeoKeyDirectoryTag', info.GeoTIFFTags.GeoKeyDirectoryTag );
 %% import BINs & ROI
-BIN1                    = geotiffread( fullfile(BASE_DIR,'data',FIL_BIN1) );
-BIN2                    = geotiffread( fullfile(BASE_DIR,'data',FIL_BIN2) );
-ROI                     = geotiffread( fullfile(BASE_DIR,'data',FIL_ROI) );
-%% compute
+BIN1                    = geotiffread( FIL_BIN1 );
+BIN2                    = geotiffread( FIL_BIN2 );
+ROI                     = geotiffread( FIL_ROI  );
+
+if plot_me
+    imshowpair(BIN1,BIN2,'montage') %, 'InitialMagnification','fit')
+end
+%% compute MatLab Land Take
 tic
+BIN1f       = BIN1;
+BIN1f(ROI==0) = 0;
+BIN2f       = BIN2;
+BIN2f(ROI==0) = 0;
 % kernel 1
-count(1) = sum(BIN2(:)==0 & BIN1(:)==0);
-count(2) = sum(BIN2(:)==0 & BIN1(:)==1);
-count(3) = sum(BIN2(:)==1 & BIN1(:)==0);
-count(4) = sum(BIN2(:)==1 & BIN1(:)==1);
+count(1)    = sum(BIN2f(:)==0 & BIN1f(:)==0);
+count(2)    = sum(BIN2f(:)==0 & BIN1f(:)==1);
+count(3)    = sum(BIN2f(:)==1 & BIN1f(:)==0);
+count(4)    = sum(BIN2f(:)==1 & BIN1f(:)==1);
 % kernel 2
-LTAKE_ml                = (BIN2-BIN1).*ROI;
-toc
+LTAKE_ml    = double(BIN2f) - double(BIN1f);
+T(1)        = toc;
+%% execute CUDA-code & grab stout
+if cu_run
+    
+    setenv('LD_LIBRARY_PATH', '');
+    
+    % run_pars        = [' ',num2str(tiledimX),' ',num2str(tiledimY),' ',num2str(WIDTH),' ',num2str(HEIGHT),' ',num2str(print_me)];
+    run_pars        = '';
+    run_str         = [exefil, run_pars];
+    fprintf('\n%s\n',repmat('–',1,130))
+    fprintf('Running CUDA-C program:\n\t%s\n',run_str);
+    fprintf('%s\n',repmat('–',1,130))
+    tic
+    [status,out]    = unix( run_str, '-echo' );
+    T(3)            = toc;
+    fprintf('%s\n\n\n',repmat('–',1,130))
+    sq_open         = strfind(out,'[');
+    str_divide      = strfind(out,':');
+    T(2)            = str2double( out(str_divide(end)+1:sq_open(end) -1) )/1000;
+end
 %% print bins & counts [matlab vs cuda]
 % -----------------------------
 % (N) (BIN2,BIN1)	--> (LTAKE)
@@ -90,8 +133,11 @@ for ii = 1:size(bins,2)
 end
 fprintf('%s\n',repmat('-',1,16))
 fprintf(' %s\t%d\n','tot',sum(count))
+
+fprintf('\n')
+
 % CUDA
-count_cu = load( fullfile(BASE_DIR,'data','LTAKE_count.txt') );
+count_cu = load( FIL_LTAKE_count );
 fprintf('\n')
 fprintf('%s\n','CUDA')
 fprintf('%s\n',repmat('-',1,16))
@@ -101,22 +147,41 @@ for ii = 1:size(bins,2)
     good = 'x';
     fprintf(' %s\t%d',bins{ii},count_cu(ii))
     if count_cu(ii)-count(ii)==0, good = 'ok'; end
-    fprintf('\t(%s)',good)
+    cFormat = ['%',num2str(14-numel(num2str(count_cu(ii)))),'s!'];
+    fprintf(cFormat,good)
     fprintf('\n')
 end
 fprintf('%s\n',repmat('-',1,16))
 good = 'x';
 fprintf(' %s\t%d','tot',sum(count_cu))
 if sum(count_cu)-sum(count)==0, good = 'ok'; end
-fprintf('\t(%s)',good)
+cFormat = ['%',num2str(14-numel(num2str(sum(count_cu)))),'s!'];
+fprintf(cFormat,good)
 fprintf('\n')
 
 fprintf('\n')
+%% import Cuda-C Land Take
+LTAKE_cu        = geotiffread( FIL_LTAKE_grid );
 %% DIFF MatLab vs CUDA
-LTAKE_cu        = double(geotiffread( fullfile(BASE_DIR,'data','LTAKE_map.tif') ));
 DIFF            = LTAKE_ml-LTAKE_cu;
-fprintf( 'No. of pixels with errors (MatLab-CUDA):\t%d\n', sum(abs(LTAKE_ml(:)-LTAKE_cu(:))) )
+fprintf( '  > No. pixels with errors (ml-cu):\t%d\n', sum(abs( DIFF(:) )) )
+fprintf( '  > speed-up (ml/cu) = %3.1f\t( %3.2f [ms] / %3.2f [ms] )\n', T(1)/T(2),T(1)*1000,T(2)*1000 );
+%% deep check
+[r,c]=find(DIFF);
+if ~isempty( r )
+    fprintf('%12s, %12s, %12s, %12s, %12s, %12s\n', ...
+            'BIN1','BIN2','BIN1f','BIN2f','LTAKE[cu]','LTAKE[ml]' ...
+           )
+    for ii = 1:10
+        fprintf('%12d, %12d, %12d, %12d, %12d, %12d\n',     ...
+            BIN1(r(ii),c(ii)), BIN2(r(ii),c(ii)),           ...
+            BIN1f(r(ii),c(ii)), BIN2f(r(ii),c(ii)),         ...
+            LTAKE_cu(r(ii),c(ii)), LTAKE_ml(r(ii),c(ii))    ...
+        )
+    end
+end
 %% understand/check CUDA grid
+if ~create_bins, newsize = size(BIN1); end
 maplen  = prod(newsize);
 mapel_per_thread = 32*4;
 bdx     = 512;

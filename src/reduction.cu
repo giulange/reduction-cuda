@@ -17,14 +17,17 @@
 /**
  * 	PARS
  */
-#define 		BLOCK_DIM_small				64
-#define 		BLOCK_DIM 					256
-bool 			print_intermediate_arrays 	= false;
-const char 		*BASE_PATH 					= "/home/giuliano/git/cuda/reduction";
+#define 					BLOCK_DIM_small				64
+#define 					BLOCK_DIM 					256
+
+static const unsigned int 	threads 					= 512;
+bool 						print_intermediate_arrays 	= false;
+const char 					*BASE_PATH 					= "/home/giuliano/git/cuda/reduction";
 
 /*
  *	kernel labels
  */
+const char		*kern_0			= "filter_roi";
 const char 		*kern_1 		= "imperviousness_change_histc_sh_4"	;
 const char 		*kern_2 		= "imperviousness_change"	;
 char			buffer[255];
@@ -32,9 +35,15 @@ char			buffer[255];
 /*
  * 		DEFINE I/O files
  */
-const char 		*FIL_ROI 		= "/home/giuliano/git/cuda/reduction/data/ROI.tif";
-const char 		*FIL_BIN1 		= "/home/giuliano/git/cuda/reduction/data/BIN1.tif";
-const char 		*FIL_BIN2 		= "/home/giuliano/git/cuda/reduction/data/BIN2.tif";
+// I/–
+//const char 		*FIL_ROI 		= "/home/giuliano/git/cuda/reduction/data/ROI.tif";
+//const char 		*FIL_BIN1 		= "/home/giuliano/git/cuda/reduction/data/BIN1.tif";
+//const char 		*FIL_BIN2 		= "/home/giuliano/git/cuda/reduction/data/BIN2.tif";
+const char 		*FIL_ROI 		= "/media/DATI/db-backup/ssgci-data/testing/ssgci_roi.tif";
+const char 		*FIL_BIN1 		= "/media/DATI/db-backup/ssgci-data/testing/ssgci_bin.tif";
+const char 		*FIL_BIN2 		= "/media/DATI/db-backup/ssgci-data/testing/ssgci_bin2.tif";
+
+// –/O
 const char 		*FIL_LTAKE_grid	= "/home/giuliano/git/cuda/reduction/data/LTAKE_map.tif";
 const char 		*FIL_LTAKE_count= "/home/giuliano/git/cuda/reduction/data/LTAKE_count.txt";
 
@@ -84,6 +93,23 @@ void write_mat_int( const int *MAT, unsigned int nr, unsigned int nc, const char
 	fclose(fid);
 }
 
+__global__ void
+filter_roi( unsigned char *BIN, const unsigned char *ROI, unsigned int map_len){
+    unsigned int tid 		= threadIdx.x;
+    unsigned int bix 		= blockIdx.x;
+    unsigned int bdx 		= blockDim.x;
+    unsigned int gdx 		= gridDim.x;
+    unsigned int i 			= bix*bdx + tid;
+    unsigned int gridSize 	= bdx*gdx;
+
+    while (i < map_len)
+    {
+    	//BIN[i] *= ROI[i];
+    	BIN[i] = (unsigned char) ((int)BIN[i] * (int)ROI[i]);
+        i += gridSize;
+    }
+}
+
 __global__ void imperviousness_change(
 							const unsigned char *dev_BIN1, const unsigned char *dev_BIN2,
 							unsigned int WIDTH, unsigned int HEIGHT, int *dev_LTAKE_map
@@ -110,7 +136,7 @@ __global__ void imperviousness_change_double(
 	unsigned long int tix	= bdx*bix + x;	// offset
 
 	if( tix < WIDTH*HEIGHT ){
-		dev_LTAKE_map[tix]	= (double)((double)dev_BIN2[tix] - (double)dev_BIN1[tix]);
+		dev_LTAKE_map[tix]	= (double) ( (double)dev_BIN2[tix] - (double)dev_BIN1[tix] );
 	}
 }
 __global__ void imperviousness_change_char(
@@ -350,7 +376,7 @@ int main( int argc, char **argv ){
 	 * 		KERNELS GEOMETRY
 	 * 		NOTE: use ceil() instead of the "%" operator!!!
 	 */
-	unsigned int bdx, gdx, num_blocks_per_SM, mapel_per_thread;
+	unsigned int bdx, gdx, num_blocks_per_SM, mapel_per_thread, Nblks_per_grid;
 /*	if(map_len/BLOCK_DIM < N_sm){
 		bdx					= BLOCK_DIM_small;
 	}else {
@@ -361,10 +387,14 @@ int main( int argc, char **argv ){
 	num_blocks_per_SM       = max_threads_per_SM / bdx;
 	mapel_per_thread        = (unsigned int)ceil( (double)map_len / (double)((bdx*1)*N_sm*num_blocks_per_SM) );
 	gdx                     = (unsigned int)ceil( (double)map_len / (double)( mapel_per_thread*(bdx*1) ) );
+	Nblks_per_grid 			= N_sm* (max_threads_per_SM /threads);
+
 	dim3 block( bdx,1,1 );
 	dim3 grid ( gdx,1,1 );
-	int sh_mem				= (BLOCK_DIM*4)*(sizeof(int));
-	//double sh_mem_double	= (BLOCK_DIM*4)*(sizeof(double));
+	dim3 	dimBlock( threads, 1, 1 );
+	dim3 	dimGrid(  Nblks_per_grid,  1, 1 );
+	int sh_mem				= (bdx*4)*(sizeof(int));
+	//double sh_mem_double	= (bdx*4)*(sizeof(double));
 	unsigned int gdx_2		= (unsigned int)ceil( (double)map_len / (double)( (bdx*4) ) );
 	dim3 block_2( bdx*4,1,1 );
 	dim3 grid_2 ( gdx_2,1,1 );
@@ -380,14 +410,30 @@ int main( int argc, char **argv ){
 
 	/*		KERNELS INVOCATION
 	 *
-	 *			******************************
+	 *			********************************
+	 *			-0- filter_roi twice(BIN1,BIN2)
 	 *			-1- imperviousness_change_sh_4
 	 *			-2- imperviousness_change
-	 *			******************************
+	 *			********************************
 	 *
 	 *		Note that imperviousness_change_large does not work!!
 	 */
 	printf("\n\n");
+	// ***-0-***
+	start_t = clock();
+	filter_roi<<<dimGrid,dimBlock>>>(dev_BIN1,dev_ROI,map_len);
+	filter_roi<<<dimGrid,dimBlock>>>(dev_BIN2,dev_ROI,map_len);
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	end_t = clock();
+	printf("  -%d- %34s\t%6d [msec]\n",++count_print,kern_0,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	if (print_intermediate_arrays){
+		CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(int),cudaMemcpyDeviceToHost) );
+		//CUDA_CHECK_RETURN( cudaMemcpy(host_LTAKE_count,dev_LTAKE_count,	(size_t)4*sizeof(double),cudaMemcpyDeviceToHost) );
+		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_0);
+		write_mat_int( host_LTAKE_count, 4, 1, buffer );
+	}
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+
 	// ***-1-***
 	start_t = clock();
 	imperviousness_change_histc_sh_4<<<grid,block,sh_mem>>>( 	dev_BIN1, dev_BIN2, MDbin.width, MDbin.heigth,
